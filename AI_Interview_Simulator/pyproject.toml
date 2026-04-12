@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "interview_env"
+version = "2.0.0"
+description = "AI Interview Simulator - An OpenEnv compatible environment"
+authors = [
+    { name = "Umesh Chapala" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=1.10.0,<3.0.0",
+    "openenv-core>=0.1.0",
+    "httpx>=0.23.0",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.95.0",
+    "uvicorn>=0.20.0",
+    "requests>=2.28.0",
+    "python-dotenv>=0.21.0",
+    "openai>=1.0.0"
+]
+
+[project.scripts]
+server = "server.app:main"
+ai-interview-simulator = "server.app:main"
+start = "server.app:start"
+
+[tool.hatch.build.targets.wheel]
+packages = ["env", "server"]
