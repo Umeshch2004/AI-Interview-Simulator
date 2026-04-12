@@ -1,95 +1,204 @@
 """
-Verification script to validate that all 3 tasks have graders properly configured.
-Run this to verify submission completeness.
+Validator-focused verification for task and grader discoverability.
+
+Run this before submission to confirm:
+1. `openenv.yaml` declares at least 3 tasks with explicit graders.
+2. Each manifest grader import resolves successfully.
+3. Root-level `tasks.py` and `graders.py` expose the same 3 tasks.
+4. Internal environment graders still execute correctly.
 """
 
-from env import TASKS, get_task, get_all_tasks
+from __future__ import annotations
 
-def verify_tasks_with_graders():
-    """Verify that all 3 tasks are properly configured with graders."""
-    
-    print("=" * 70)
-    print("TASK VERIFICATION REPORT")
-    print("=" * 70)
-    
-    all_tasks = get_all_tasks()
-    
-    # Check 1: Ensure we have at least 3 tasks
-    num_tasks = len(all_tasks)
-    print(f"\n✓ Number of tasks: {num_tasks}")
-    
-    if num_tasks < 3:
-        print(f"  ✗ ERROR: Need at least 3 tasks, found {num_tasks}")
+import importlib
+import inspect
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Tuple
+
+import yaml
+
+from env import get_all_tasks as get_internal_tasks
+from env import get_task as get_internal_task
+from graders import GRADERS
+from tasks import get_tasks as get_public_tasks
+
+ROOT = Path(__file__).resolve().parent
+MANIFEST_PATH = ROOT / "openenv.yaml"
+
+
+TEST_SAMPLES = {
+    "easy": {
+        "question": "What is a dictionary in Python?",
+        "answer": (
+            "A dictionary is a key-value data structure that stores values under "
+            "unique, hashable keys and supports fast lookup."
+        ),
+        "rubric": {"keywords": ["key", "value", "hash", "lookup"], "min_length": 30},
+        "expected_concepts": ["key-value storage", "hash map", "unique keys", "fast retrieval"],
+        "category": "dsa",
+    },
+    "medium": {
+        "question": "How do you detect a cycle in a linked list?",
+        "answer": (
+            "Use Floyd's tortoise and hare algorithm with slow and fast pointers. "
+            "If they meet, a cycle exists. The time complexity is O(n) and space is O(1)."
+        ),
+        "rubric": {"keywords": ["slow", "fast", "pointer", "floyd"], "min_length": 50},
+        "expected_concepts": ["Floyd's cycle-finding algorithm", "two pointers", "O(1) space"],
+        "category": "dsa",
+    },
+    "hard": {
+        "question": "Design a distributed rate limiter for a public API like Twitter.",
+        "answer": (
+            "Use a token bucket stored in Redis for distributed coordination, shard by "
+            "user or API key, and add regional replicas plus monitoring for failover."
+        ),
+        "rubric": {"keywords": ["token", "bucket", "redis", "distributed"], "min_length": 120},
+        "expected_concepts": ["token bucket", "redis", "distributed cache", "high availability"],
+        "category": "system_design",
+    },
+}
+
+
+def _status(ok: bool) -> str:
+    return "OK" if ok else "FAIL"
+
+
+def _load_manifest() -> Dict[str, Any]:
+    with MANIFEST_PATH.open("r", encoding="utf-8") as file_obj:
+        return yaml.safe_load(file_obj)
+
+
+def _resolve_grader(grader_ref: str) -> Tuple[Callable[..., float], Any]:
+    if not isinstance(grader_ref, str) or ":" not in grader_ref:
+        raise ValueError(f"Invalid grader reference: {grader_ref!r}")
+
+    module_name, attr_name = grader_ref.split(":", 1)
+    module = importlib.import_module(module_name)
+    attr = getattr(module, attr_name)
+
+    if inspect.isclass(attr):
+        instance = attr()
+        if hasattr(instance, "grade") and callable(instance.grade):
+            return instance.grade, attr
+        raise TypeError(f"Grader class {grader_ref} has no callable grade() method")
+
+    if not callable(attr):
+        raise TypeError(f"Resolved grader {grader_ref} is not callable")
+
+    return attr, attr
+
+
+def _is_exclusive_unit_interval(value: float) -> bool:
+    return 0.0 < float(value) < 1.0
+
+
+def verify_manifest() -> bool:
+    manifest = _load_manifest()
+
+    print("=" * 72)
+    print("OPENENV TASK / GRADER VALIDATION")
+    print("=" * 72)
+
+    required_top_level = ("spec_version", "app", "tasks")
+    missing = [key for key in required_top_level if key not in manifest]
+    ok = not missing
+    print(f"[{_status(ok)}] Manifest required keys present: {required_top_level}")
+    if missing:
+        print(f"      Missing keys: {missing}")
         return False
-    
-    # Check 2: Verify each task has a grader
-    print(f"\n✓ Tasks with graders:")
-    all_have_graders = True
-    
-    for difficulty, task in all_tasks.items():
-        has_grader = callable(task.grader)
-        status = "✓" if has_grader else "✗"
-        print(f"  {status} {difficulty:10} : {task.name}")
-        if not has_grader:
-            all_have_graders = False
-    
-    if not all_have_graders:
-        print(f"\n  ✗ ERROR: Not all tasks have graders!")
+
+    tasks = manifest.get("tasks") or []
+    enough_tasks = len(tasks) >= 3
+    print(f"[{_status(enough_tasks)}] Manifest task count: {len(tasks)}")
+    if not enough_tasks:
         return False
-    
-    # Check 3: Test grading with sample data
-    print(f"\n✓ Grader functionality check:")
-    
-    test_samples = {
-        "easy": {
-            "question": "What is a dictionary in Python?",
-            "answer": "A dictionary is a key-value data structure that allows you to store and retrieve data efficiently. Keys must be unique and hashable. For example, {'name': 'John', 'age': 30} is a dictionary with string keys.",
-            "rubric": {"keywords": ["key", "value", "hash", "dict", "lookup"], "min_length": 30},
-            "expected_concepts": ["key-value storage", "hash map", "O(1) lookup", "unique keys", "fast retrieval"],
-            "category": "dsa",
-        },
-        "medium": {
-            "question": "How do you detect a cycle in a linked list?",
-            "answer": "You can use Floyd's cycle-finding algorithm with two pointers. Move one pointer (slow) one step at a time, and another (fast) two steps. If they meet at the same node, there's a cycle. Time complexity is O(n) and space is O(1).",
-            "rubric": {"keywords": ["slow", "fast", "pointer", "floyd", "tortoise", "hare"], "min_length": 50},
-            "expected_concepts": ["Floyd's cycle-finding algorithm", "Tortoise and Hare", "two pointers", "fast pointer", "slow pointer"],
-            "category": "dsa",
-        },
-        "hard": {
-            "question": "Design a distributed rate limiter for a public API like Twitter.",
-            "answer": "Use a token bucket algorithm stored in Redis for distributed coordination. Each user/IP gets a bucket. Tokens are added at a fixed rate. For each request, consume one token. If no tokens available, reject the request. Use sliding window log as backup. Maintain separate buckets per region for scalability.",
-            "rubric": {"keywords": ["token", "bucket", "redis", "sliding", "window", "distributed"], "min_length": 150},
-            "expected_concepts": ["token bucket", "redis", "distributed cache", "sliding window", "load balancer", "high availability"],
-            "category": "system_design",
-        },
-    }
-    
-    all_graders_work = True
-    for difficulty, test_data in test_samples.items():
+
+    all_graders_resolve = True
+    for task in tasks:
+        task_id = task.get("id", "<missing-id>")
+        grader_ref = task.get("grader")
         try:
-            task = get_task(difficulty)
-            reward, breakdown = task.grade(
-                answer=test_data["answer"],
-                question=test_data["question"],
-                rubric=test_data["rubric"],
-                expected_concepts=test_data["expected_concepts"],
-                category=test_data.get("category", "dsa"),
+            grader_fn, grader_obj = _resolve_grader(grader_ref)
+            smoke_score = grader_fn(state={"task": task_id, "total_score": 0.77})
+            score_ok = _is_exclusive_unit_interval(smoke_score)
+            print(
+                f"[{_status(score_ok)}] Manifest grader {task_id}: {grader_ref} -> "
+                f"{getattr(grader_obj, '__name__', type(grader_obj).__name__)} "
+                f"(smoke score={smoke_score:.3f})"
             )
-            print(f"  ✓ {difficulty:10} grader works (reward: {reward:.3f})")
-        except Exception as e:
-            print(f"  ✗ {difficulty:10} grader failed: {str(e)}")
-            all_graders_work = False
-    
-    if not all_graders_work:
-        print(f"\n  ✗ ERROR: Some graders failed!")
+            all_graders_resolve &= score_ok
+        except Exception as exc:
+            all_graders_resolve = False
+            print(f"[FAIL] Manifest grader {task_id}: {grader_ref} -> {exc}")
+
+    return all_graders_resolve
+
+
+def verify_public_registry() -> bool:
+    tasks = get_public_tasks()
+    enough_tasks = len(tasks) >= 3
+    print(f"[{_status(enough_tasks)}] Root tasks.py exports {len(tasks)} task definitions")
+    if not enough_tasks:
         return False
-    
-    print("\n" + "=" * 70)
-    print("✓ ALL CHECKS PASSED - Submission is ready!")
-    print("=" * 70)
+
+    task_ids = {task["id"] for task in tasks}
+    graders_present = task_ids == set(GRADERS)
+    print(f"[{_status(graders_present)}] Root tasks.py and graders.py agree on task ids")
+    if not graders_present:
+        print(f"      task ids={sorted(task_ids)} grader ids={sorted(GRADERS)}")
+        return False
+
+    for task_id, grader in GRADERS.items():
+        sample_score = grader(state={"task": task_id, "total_score": 0.66})
+        score_ok = _is_exclusive_unit_interval(sample_score)
+        print(f"[{_status(score_ok)}] Root grader {task_id}: sample score={sample_score:.3f}")
+        if not score_ok:
+            return False
+
     return True
 
 
+def verify_internal_graders() -> bool:
+    internal_tasks = get_internal_tasks()
+    enough_tasks = len(internal_tasks) >= 3
+    print(f"[{_status(enough_tasks)}] env.tasks exports {len(internal_tasks)} internal tasks")
+    if not enough_tasks:
+        return False
+
+    all_ok = True
+    for task_id, payload in TEST_SAMPLES.items():
+        try:
+            reward, _ = get_internal_task(task_id).grade(
+                answer=payload["answer"],
+                question=payload["question"],
+                rubric=payload["rubric"],
+                expected_concepts=payload["expected_concepts"],
+                category=payload["category"],
+            )
+            score_ok = _is_exclusive_unit_interval(reward)
+            print(f"[{_status(score_ok)}] Internal grader {task_id}: reward={reward:.3f}")
+            all_ok &= score_ok
+        except Exception as exc:
+            all_ok = False
+            print(f"[FAIL] Internal grader {task_id}: {exc}")
+
+    return all_ok
+
+
+def main() -> int:
+    checks = [
+        verify_manifest(),
+        verify_public_registry(),
+        verify_internal_graders(),
+    ]
+
+    passed = all(checks)
+    print("=" * 72)
+    print("READY FOR SUBMISSION" if passed else "VALIDATION FAILED")
+    print("=" * 72)
+    return 0 if passed else 1
+
+
 if __name__ == "__main__":
-    success = verify_tasks_with_graders()
-    exit(0 if success else 1)
+    raise SystemExit(main())

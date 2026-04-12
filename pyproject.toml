@@ -33,3 +33,4 @@ start = "server.app:start"
 
 [tool.hatch.build.targets.wheel]
 packages = ["env", "server"]
+include = ["graders.py", "tasks.py", "openenv.yaml", "inference.py"]

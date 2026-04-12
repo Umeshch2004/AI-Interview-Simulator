@@ -14,13 +14,34 @@ from openai import OpenAI
 
 # Environment configuration (non-LLM vars are safe to read at load time)
 SPACE_URL = os.getenv("SPACE_URL", "http://localhost:7860").rstrip("/")
-TASK_NAME = os.getenv("TASK_NAME", "easy")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "15"))
 TEMPERATURE = 0.7
+TASK_ORDER = ("easy", "medium", "hard")
 
 def _safe_score(val: float) -> float:
     """Ensure score is strictly in (0.001, 0.999) per validator requirement."""
     return max(0.001, min(0.999, val))
+
+
+def _format_score(val: float, decimals: int = 3, clamp: bool = False) -> str:
+    num = _safe_score(val) if clamp else float(val)
+    return f"{num:.{decimals}f}"
+
+
+def _format_reward(val: float) -> str:
+    return f"{_safe_score(val):.3f}".rstrip("0").rstrip(".")
+
+
+def _step_action_name(category: str, follow_up_context: Optional[str]) -> str:
+    if follow_up_context:
+        return "answer_followup"
+    if category == "system_design":
+        return "answer_system_design"
+    if category == "behavioral":
+        return "answer_behavioral"
+    if category == "debugging":
+        return "answer_debugging"
+    return "answer"
 
 # Warn early if LLM proxy vars are absent, but do NOT crash —
 # the hackathon validator may inject them before the first LLM call.
@@ -48,32 +69,47 @@ Guidelines:
 """).strip()
 
 def log_start(task: str, model: str, env: str):
-    print(f"[START] task={task} model={model} env={env}", flush=True)
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
-def log_step(step: int, difficulty: str, question: str, answer: str, reward: float, done: bool, breakdown: dict):
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str] = None):
     done_val = str(done).lower()
-    print(f"[STEP] step={step} difficulty={difficulty}", flush=True)
-    print(f"  Q: {question}", flush=True)
-    print(f"  A: {answer}", flush=True)
-    print(f"  reward={reward:.3f} done={done_val}", flush=True)
-    
-    # Format breakdown: sem=... depth=... rel=... clarity=... followup=...
-    b = breakdown
-    bd_str = (
-        f"sem={b.get('semantic_correctness', 0):.3f} "
-        f"depth={b.get('depth_and_detail', 0):.3f} "
-        f"rel={b.get('relevance', 0):.3f} "
-        f"clarity={b.get('clarity', 0):.3f} "
-        f"followup={b.get('followup_readiness', 0):.3f}"
-    )
-    print(f"  [REWARD_BREAKDOWN] {bd_str}", flush=True)
-
-def log_end(success: bool, steps: int, score: float, rewards: List[float]):
-    rewards_str = "[" + ",".join(f"{r:.3f}" for r in rewards) + "]"
+    err_val = "null" if error in (None, "") else error
     print(
-        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        f"[STEP] step={step} action={action} reward={_format_reward(reward)} done={done_val} error={err_val}",
         flush=True,
     )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]):
+    rewards_str = ",".join(_format_reward(r) for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={_format_score(score, 3, clamp=True)} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+def get_tasks_to_run() -> List[str]:
+    """
+    Run all tasks by default so the validator can observe easy/medium/hard in one
+    inference pass. A comma-separated TASK_NAME or TASK env var still allows
+    targeted local testing.
+    """
+    raw_filter = (os.getenv("TASK_NAME") or os.getenv("TASK") or "").strip()
+    if not raw_filter:
+        return list(TASK_ORDER)
+
+    requested = [task.strip() for task in raw_filter.split(",") if task.strip()]
+    valid = [task for task in requested if task in TASK_ORDER]
+
+    if not valid:
+        print(
+            f"[WARN] Invalid task filter '{raw_filter}'. Falling back to all tasks: {', '.join(TASK_ORDER)}",
+            flush=True,
+        )
+        return list(TASK_ORDER)
+
+    return valid
 
 
 # ─── LiteLLM Proxy LLM Call (Hackathon Compliant) ────────────────────────────
@@ -179,16 +215,6 @@ async def get_answer(
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 async def run_episode(task: str, http: httpx.AsyncClient) -> float:
     """Run one full episode. Returns final average score."""
-    # Reset environment
-    reset_resp = await http.post(f"{SPACE_URL}/reset", params={"task": task})
-    if reset_resp.status_code != 200:
-        print(f"[ERROR] Reset failed: {reset_resp.text}")
-        return 0.0
-
-    data = reset_resp.json()
-    obs   = data["observation"]
-    state = data["state"]
-
     model_name = os.environ.get("MODEL_NAME", "gpt-4o-mini")
     log_start(task=task, env="interview-env", model=model_name)
 
@@ -198,11 +224,19 @@ async def run_episode(task: str, http: httpx.AsyncClient) -> float:
     done    = False
 
     try:
+        # Reset environment
+        reset_resp = await http.post(f"{SPACE_URL}/reset", params={"task": task})
+        if reset_resp.status_code != 200:
+            print(f"[ERROR] Reset failed for task='{task}': {reset_resp.text}", flush=True)
+            return 0.0
+
+        data = reset_resp.json()
+        obs = data["observation"]
+
         while not done and steps < MAX_STEPS:
             question         = obs["question"]
             category         = obs.get("category", "general")
             follow_up_ctx    = obs.get("follow_up_context")
-            difficulty       = obs.get("difficulty", task)
 
             if question == "Interview complete. Thank you!":
                 break
@@ -243,21 +277,16 @@ async def run_episode(task: str, http: httpx.AsyncClient) -> float:
             info      = step_data.get("info", {})
 
             reward_val = reward.get("value", 0.0) if isinstance(reward, dict) else 0.0
-            breakdown  = reward.get("breakdown") if isinstance(reward, dict) else None
-            breakdown  = breakdown or {}
-
             rewards.append(reward_val)
             history.append({"question": question, "answer": answer})
             steps += 1
 
             log_step(
                 step=steps,
-                difficulty=difficulty,
-                question=question,
-                answer=answer,
+                action=_step_action_name(category, follow_up_ctx),
                 reward=reward_val,
                 done=done,
-                breakdown=breakdown
+                error=err_msg,
             )
             
             if err_msg and answer == "Error generating response":
@@ -276,18 +305,31 @@ async def main():
     async with httpx.AsyncClient(timeout=60.0) as http:
         # Health check
         try:
-            health = await http.get(f"{SPACE_URL}/health")
-            print(f"[INFO] Server health: {health.json()}", flush=True)
+            await http.get(f"{SPACE_URL}/health")
         except Exception as e:
             print(f"[WARN] Health check failed: {e}", flush=True)
 
-        # Run the selected task
-        try:
-            score = await run_episode(task=TASK_NAME, http=http)
-            print(f"\n[SUMMARY] Final score for task='{TASK_NAME}': {score:.3f}", flush=True)
-        except Exception as e:
-            print(f"[ERROR] Episode failed with exception: {type(e).__name__}: {e}", flush=True)
-            print(f"\n[SUMMARY] Final score for task='{TASK_NAME}': 0.001", flush=True)
+        tasks_to_run = get_tasks_to_run()
+        results = []
+
+        for task_name in tasks_to_run:
+            try:
+                score = await run_episode(task=task_name, http=http)
+                score = _safe_score(score)
+                results.append((task_name, score))
+            except Exception as e:
+                print(f"[ERROR] Episode failed for task='{task_name}': {type(e).__name__}: {e}", flush=True)
+                results.append((task_name, 0.001))
+
+            print(f"      -> Avg score '{task_name}': {_format_score(results[-1][1], 4, clamp=True)}", flush=True)
+            print("", flush=True)
+
+        if results:
+            average = _safe_score(sum(score for _, score in results) / len(results))
+            print("\n===== FINAL SCORES =====", flush=True)
+            for task_name, score in results:
+                print(f"  {task_name}: {_format_score(score, 4, clamp=True)}", flush=True)
+            print(f"  Average: {_format_score(average, 4, clamp=True)}", flush=True)
 
 
 if __name__ == "__main__":

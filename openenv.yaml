@@ -1,10 +1,14 @@
+spec_version: 1
 name: interview-env
-version: 2.0.0
+version: "2.0.0"
 description: >
-  AI Interview Simulator — an OpenEnv-compatible RL environment where an LLM agent
-  acts as a technical interview candidate. The environment asks DSA, system design,
-  and behavioral questions, evaluates answers using a hybrid Gemini + heuristic
-  5-component reward function, and dynamically adjusts difficulty based on performance.
+  AI Interview Simulator, an OpenEnv-compatible reinforcement learning
+  environment where an LLM agent answers technical interview questions across
+  easy, medium, and hard tracks.
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
 author: Umesh Chapala
 tags:
   - interview
@@ -12,62 +16,63 @@ tags:
   - rl
   - nlp
   - adaptive
-  - gemini
-  - real-world
+  - openenv
 
 tasks:
   - id: easy
-    grader: auto
+    difficulty: easy
     description: >
-      Basic programming concepts — variables, data structures, functions.
-      3 questions. No follow-ups. Good starting point for training.
+      Basic programming concepts, Python fundamentals, and entry-level data
+      structures. Three questions with no follow-ups.
     max_steps: 5
+    grader: graders:grade_easy
 
   - id: medium
-    grader: auto
+    difficulty: medium
     description: >
-      Algorithms, complexity analysis, debugging. 4 questions.
-      Requires code examples for full marks. Moderate adaptive difficulty.
+      Algorithms, complexity analysis, debugging, and implementation detail.
+      Four questions with richer code-oriented grading.
     max_steps: 8
+    grader: graders:grade_medium
 
   - id: hard
-    grader: auto
+    difficulty: hard
     description: >
-      Full interview — system design, advanced DSA, behavioral questions.
-      5 questions + follow-up injection on partial scores (0.40–0.72).
-      Dynamic difficulty adapts based on rolling 3-answer window.
+      Full interview with advanced DSA, system design, and behavioral
+      reasoning. Five questions with follow-up injection on partial answers.
     max_steps: 15
+    grader: graders:grade_hard
 
 observation_space:
   question: string
-  difficulty: string             # current adapted difficulty
-  category: string               # dsa | system_design | behavioral | debugging
+  difficulty: string
+  category: string
   question_number: integer
   total_questions: integer
-  last_answer_feedback: string   # human-readable feedback from grader
-  last_reward: float             # reward from previous step
+  last_answer_feedback: string
+  last_reward: float
   remaining_questions: integer
-  follow_up_context: string      # null or context hint for follow-up questions
-  performance_hint: string       # coaching hint based on rolling performance
+  follow_up_context: string
+  performance_hint: string
 
 action_space:
-  answer: string                 # candidate's response to the interview question
+  answer: string
 
-reward_range: [0.001, 0.999]      # strictly between 0 and 1 (exclusive)
+reward_range: [0.001, 0.999]
 
 reward_components:
   semantic_correctness:
     weight: 0.40
-    description: Gemini evaluates concept coverage vs expected_concepts
+    description: Concept coverage against expected concepts
   depth_and_detail:
     weight: 0.20
-    description: Local — length, code presence, examples
+    description: Length, examples, and code presence
   relevance:
     weight: 0.20
-    description: Gemini checks if answer stays on topic
+    description: How directly the answer addresses the question
   clarity:
     weight: 0.10
-    description: Local — sentence structure, coherence heuristics
+    description: Structure and readability heuristics
   followup_readiness:
     weight: 0.10
-    description: Local — trade-off mentions, complexity analysis (hard mode only)
+    description: Trade-offs and complexity awareness in hard mode
