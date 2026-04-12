@@ -27,7 +27,13 @@ def ui_reset(task: str):
     obs = _shared_env.reset()
     state = _shared_env.state().dict()
     
-    reward_html = f"<div style='font-size: 1.2em; font-weight: bold;'>Reward: <span style='color: #4CAF50;'>0.0</span> Done: <span style='color: #f44336;'>False</span></div>"
+    reward_html = (
+        "<div style='display: flex; gap: 20px; font-size: 1.2em; font-weight: bold;'>"
+        "<div>Current Reward: <span style='color: #888;'>N/A</span></div>"
+        "<div>Average: <span style='color: #4CAF50;'>0.0000</span></div>"
+        "<div>Done: <span style='color: #f44336;'>False</span></div>"
+        "</div>"
+    )
     
     return (
         reward_html,
@@ -43,8 +49,15 @@ def ui_step(answer: str):
         return ui_reset("easy")
     
     if _shared_env.done:
+        reward_html = (
+            "<div style='display: flex; gap: 20px; font-size: 1.2em; font-weight: bold;'>"
+            "<div>Current Reward: <span style='color: #888;'>N/A</span></div>"
+            f"<div>Average: <span style='color: #4CAF50;'>{_shared_env.state().total_score:.4f}</span></div>"
+            "<div>Done: <span style='color: #4CAF50;'>True</span></div>"
+            "</div>"
+        )
         return (
-            f"<div style='font-size: 1.2em; font-weight: bold;'>Reward: <span style='color: #4CAF50;'>{_shared_env.state().total_score:.4f}</span> Done: <span style='color: #f44336;'>True</span></div>",
+            reward_html,
             "",
             "Episode is already finished. Please Reset.",
             format_json(_shared_env.state().dict()),
@@ -56,12 +69,23 @@ def ui_step(answer: str):
         obs, reward, done, info = _shared_env.step(action)
         state = _shared_env.state().dict()
         
-        reward_color = "#4CAF50" if reward.value > 0.5 else "#FFC107" if reward.value > 0.2 else "#f44336"
+        curr_reward = reward.value
+        avg_score = info['average_score']
+        
+        # Color coding based on immediate performance
+        curr_color = "#4CAF50" if curr_reward > 0.75 else "#FFC107" if curr_reward > 0.4 else "#f44336"
+        avg_color = "#4CAF50" if avg_score > 0.6 else "#FFC107" if avg_score > 0.3 else "#f44336"
         done_color = "#f44336" if not done else "#4CAF50"
         
-        reward_html = f"<div style='font-size: 1.2em; font-weight: bold;'>Reward: <span style='color: {reward_color};'>{info['average_score']:.4f}</span> Done: <span style='color: {done_color};'>{done}</span></div>"
+        reward_html = (
+            "<div style='display: flex; gap: 20px; font-size: 1.2em; font-weight: bold;'>"
+            f"<div>Current Reward: <span style='color: {curr_color};'>{curr_reward:.4f}</span></div>"
+            f"<div>Average: <span style='color: {avg_color};'>{avg_score:.4f}</span></div>"
+            f"<div>Done: <span style='color: {done_color};'>{done}</span></div>"
+            "</div>"
+        )
         
-        status = f"Step complete. Reward: {reward.value:.4f}. Feedback: {reward.reason[:100]}..."
+        status = f"Step complete. Reward: {curr_reward:.4f}. Feedback: {reward.reason[:100]}..."
         
         return (
             reward_html,
@@ -131,7 +155,13 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
         # --- Main Console ---
         with gr.Column(scale=2):
             reward_display = gr.HTML(
-                value="<div style='font-size: 1.2em; font-weight: bold;'>Reward: <span style='color: #888;'>0.0</span> Done: <span style='color: #888;'>False</span></div>",
+                value=(
+                    "<div style='display: flex; gap: 20px; font-size: 1.2em; font-weight: bold;'>"
+                    "<div>Current Reward: <span style='color: #888;'>0.0</span></div>"
+                    "<div>Average: <span style='color: #888;'>0.0</span></div>"
+                    "<div>Done: <span style='color: #888;'>False</span></div>"
+                    "</div>"
+                ),
                 elem_classes=["metric-header"]
             )
             

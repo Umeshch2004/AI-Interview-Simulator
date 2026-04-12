@@ -53,8 +53,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Mount Gradio UI
-app = gr.mount_gradio_app(app, demo, path="/ui")
+# Mount Gradio UI at root for Hugging Face Spaces compatibility
+app = gr.mount_gradio_app(app, demo, path="/")
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,8 +68,9 @@ from fastapi.responses import RedirectResponse
 
 @app.get("/", include_in_schema=False)
 async def root():
-    """Redirect to the Gradio UI by default."""
-    return RedirectResponse(url="/ui")
+    """Gradio is mounted at root, so this is handled by Gradio if not for the middleware."""
+    # Gradio mount usually takes over root, but we keep this as a fallback or for docs
+    return {"message": "AI Interview Simulator API. UI is at root."}
 
 
 @app.get("/health")
