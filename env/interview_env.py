@@ -18,6 +18,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from .models import Observation, Action, Reward, State, RewardBreakdown
 from .engine import generate_interview_question, generate_followup
 from .graders import compute_reward, generate_feedback
+from .tasks import get_task
 
 logger = logging.getLogger(__name__)
 

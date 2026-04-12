@@ -3,7 +3,7 @@ Verification script to validate that all 3 tasks have graders properly configure
 Run this to verify submission completeness.
 """
 
-from AI_Interview_Simulator.env import TASKS, get_task, get_all_tasks
+from env import TASKS, get_task, get_all_tasks
 
 def verify_tasks_with_graders():
     """Verify that all 3 tasks are properly configured with graders."""
